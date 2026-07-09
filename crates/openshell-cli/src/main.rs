@@ -555,6 +555,13 @@ enum Commands {
     },
 
     // ===================================================================
+    // FRACTAL CODE COMMANDS
+    // ===================================================================
+    /// Execute and validate Fractal Code cells.
+    #[command(alias = "fr")]
+    Fractal(fractal::FractalArgs),
+
+    // ===================================================================
     // ADDITIONAL COMMANDS
     // ===================================================================
     /// Launch the `OpenShell` interactive TUI.
@@ -3026,6 +3033,9 @@ async fn main() -> Result<()> {
                     run::provider_delete(endpoint, &names, &tls).await?;
                 }
             }
+        }
+        Some(Commands::Fractal(args)) => {
+            fractal::handle_fractal_command(args).await?;
         }
         Some(Commands::Term { theme }) => {
             let ctx = resolve_gateway(&cli.gateway, &cli.gateway_endpoint)?;

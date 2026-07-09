@@ -1,0 +1,179 @@
+# BundleFuk Release — Build openshell-fractal binaries for all platforms
+#
+# Triggered by pushing a tag matching "bundlefuk-v*".
+# Builds the `openshell` binary (with Fractal subcommand) for 5 platforms
+# and attaches them to a GitHub Release.
+#
+# The Fractal npm runner's postinstall script downloads from these releases.
+
+name: BundleFuk Release
+
+on:
+  push:
+    tags:
+      - "bundlefuk-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. bundlefuk-v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── Build matrix — one job per platform ─────────────────────────────────
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: openshell-fractal-linux-amd64
+            cross: false
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: openshell-fractal-linux-arm64
+            cross: true
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: openshell-fractal-darwin-arm64
+            cross: false
+
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: openshell-fractal-darwin-amd64
+            cross: true
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: openshell-fractal-windows-amd64.exe
+            cross: false
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cross-compilation dependencies (Linux ARM64)
+        if: matrix.cross && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Install cross-compilation dependencies (macOS x64)
+        if: matrix.cross && runner.os == 'macOS'
+        run: |
+          echo "Building with x86_64-apple-darwin target on ARM64 runner"
+
+      - name: Build openshell binary
+        run: |
+          cargo build --release --target ${{ matrix.target }} --bin openshell
+
+      - name: Rename artifact (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mv target/${{ matrix.target }}/release/openshell ./${{ matrix.artifact }}
+
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mv target/${{ matrix.target }}/release/openshell.exe ./${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: ./${{ matrix.artifact }}
+          retention-days: 7
+
+  # ── Create GitHub Release with all binaries ────────────────────────────
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: ./artifacts
+
+      - name: Flatten artifact directory
+        run: |
+          mkdir -p ./release-binaries
+          for dir in ./artifacts/*/; do
+            cp "$dir"* ./release-binaries/ 2>/dev/null || true
+          done
+          ls -la ./release-binaries/
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd ./release-binaries
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: "BundleFuk ${{ env.RELEASE_TAG }}"
+          body: |
+            ## BundleFuk — OpenShell + Fractal Code
+
+            Prebuilt `openshell` binary with the Fractal Code integration crate.
+            Includes the `openshell fractal` subcommand for running Fractal cells
+            and scaffolds inside OpenShell sandboxes.
+
+            ### Platform binaries
+
+            | File | Platform |
+            |------|----------|
+            | `openshell-fractal-linux-amd64` | Linux x86_64 |
+            | `openshell-fractal-linux-arm64` | Linux ARM64 |
+            | `openshell-fractal-darwin-amd64` | macOS Intel |
+            | `openshell-fractal-darwin-arm64` | macOS Apple Silicon |
+            | `openshell-fractal-windows-amd64.exe` | Windows x86_64 |
+
+            ### Install
+
+            ```bash
+            # Fractal npm runner downloads this automatically via postinstall.
+            # Manual install:
+            curl -L "https://github.com/haltandcatchwater/OpenShell/releases/download/$RELEASE_TAG/openshell-fractal-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o openshell
+            chmod +x openshell
+            ```
+
+            ### SHA-256 Checksums
+            ```
+            See SHA256SUMS
+            ```
+          files: ./release-binaries/*
+          generate_release_notes: false
+          make_latest: true

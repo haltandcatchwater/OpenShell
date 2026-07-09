@@ -1,0 +1,26 @@
+[package]
+name = "openshell-fractal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fractal Code runtime integration — constitutional cell execution inside OpenShell sandboxes"
+
+[dependencies]
+openshell-core = { path = "../openshell-core" }
+openshell-sandbox = { path = "../openshell-sandbox" }
+openshell-policy = { path = "../openshell-policy" }
+openshell-prover = { path = "../openshell-prover" }
+tokio.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+url = "2"
+regex-lite = "0.1"
+hex = "0.4"
