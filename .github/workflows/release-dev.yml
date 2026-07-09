@@ -74,6 +74,37 @@ jobs:
       image-tag: ${{ github.sha }}
       runner: linux-arm64-cpu8
 
+  kubernetes-e2e:
+    needs: [build-gateway, build-supervisor]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - agent_sandbox_api: v1beta1
+            agent_sandbox_version: v0.5.0
+          - agent_sandbox_api: v1alpha1
+            agent_sandbox_version: v0.4.6
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/e2e-kubernetes-test.yml
+    with:
+      image-tag: ${{ github.sha }}
+      job-name: Kubernetes E2E (Rust smoke, Agent Sandbox ${{ matrix.agent_sandbox_api }})
+      agent-sandbox-version: ${{ matrix.agent_sandbox_version }}
+
+  kubernetes-ha-e2e:
+    needs: [build-gateway, build-supervisor]
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/e2e-kubernetes-test.yml
+    with:
+      image-tag: ${{ github.sha }}
+      job-name: Kubernetes HA E2E (Rust smoke)
+      extra-helm-values: deploy/helm/openshell/ci/values-high-availability.yaml
+      external-postgres-secret: openshell-ha-pg
+
   tag-ghcr-dev:
     name: Tag GHCR Images as Dev
     needs: [build-gateway, build-supervisor, release-dev]
@@ -779,7 +810,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release-dev:
     name: Release Dev
-    needs: [compute-versions, build-cli-linux, build-cli-macos, build-gateway-binary-linux, build-gateway-binary-macos, build-supervisor-binary-linux, build-python-wheels-linux, build-python-wheel-macos, e2e, build-driver-vm-linux, build-driver-vm-macos, build-deb, build-rpm, build-snap, smoke-linux-dev-artifacts]
+    needs: [compute-versions, build-cli-linux, build-cli-macos, build-gateway-binary-linux, build-gateway-binary-macos, build-supervisor-binary-linux, build-python-wheels-linux, build-python-wheel-macos, e2e, kubernetes-e2e, kubernetes-ha-e2e, build-driver-vm-linux, build-driver-vm-macos, build-deb, build-rpm, build-snap, smoke-linux-dev-artifacts]
     runs-on: linux-amd64-cpu8
     timeout-minutes: 10
     permissions:
