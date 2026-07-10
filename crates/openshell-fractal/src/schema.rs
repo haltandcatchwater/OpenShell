@@ -39,7 +39,9 @@ pub enum CellType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CellContract {
+    #[serde(default)]
     pub input: serde_json::Value,
+    #[serde(default)]
     pub output: serde_json::Value,
 }
 
