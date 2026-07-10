@@ -483,11 +483,11 @@ fn parse_fc_file(content: &str, path: &PathBuf) -> Result<FractalCell, miette::R
 fn parse_cell_from_yaml(cell: &serde_json::Value) -> Result<FractalCell, String> {
     let identity = cell.get("identity").ok_or("missing identity")?;
     let contract = cell.get("contract").ok_or("missing contract")?;
-    let logic_node = cell.get("logic").ok_or("missing logic")?;
-
-    // Logic is embedded in logic.process as a YAML block scalar
+    // Logic is embedded in logic.process as a YAML block scalar.
+    // Channel cells have no logic block — they route data, not compute.
+    let logic_node = cell.get("logic");
     let logic = logic_node
-        .get("process")
+        .and_then(|n| n.get("process"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
