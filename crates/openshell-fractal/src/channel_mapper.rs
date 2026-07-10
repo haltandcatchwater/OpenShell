@@ -102,8 +102,17 @@ pub fn map_all(channels: &[TypedChannelConfig]) -> Vec<MappingResult> {
     channels.iter().map(map_channel).collect()
 }
 
+/// Resolve template variables in paths. `${input.repoPath}` → `/sandbox`
+/// (the default OpenShell workdir). Other `${input.X}` vars are preserved.
+fn resolve_path(path: &str) -> String {
+    path.replace("${input.repoPath}", "/sandbox")
+}
+
 fn map_file_channel(channel: &TypedChannelConfig) -> MappingResult {
-    let allowed_paths = str_arr(&channel.scope, "allowedPaths");
+    let allowed_paths: Vec<String> = str_arr(&channel.scope, "allowedPaths")
+        .into_iter()
+        .map(|p| resolve_path(&p))
+        .collect();
     let protected_paths = str_arr(&channel.scope, "protectedPaths");
     let mut anomalies = Vec::new();
 
@@ -116,10 +125,13 @@ fn map_file_channel(channel: &TypedChannelConfig) -> MappingResult {
         ));
     }
 
+    // Merge allowed paths with OpenShell sandbox defaults
+    let mut rw = vec!["/sandbox".into(), "/tmp".into(), "/dev/null".into()];
+    rw.extend(allowed_paths);
     MappingResult::Mapped(MappedChannel {
         channel_name: channel.name.clone(),
         filesystem: Some(FilesystemPolicy {
-            read_write: Some(allowed_paths),
+            read_write: Some(rw),
             read_only: Some(vec![
                 "/usr".into(), "/lib".into(), "/dev/urandom".into(),
                 "/proc".into(), "/app".into(), "/etc".into(), "/var/log".into(),

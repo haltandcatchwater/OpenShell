@@ -443,33 +443,57 @@ fn load_cells_recursive(dir: &PathBuf, cells: &mut Vec<FractalCell>) -> Result<(
     Ok(())
 }
 
-/// Parse a .fc file: YAML frontmatter between `---` markers, then JS logic.
+/// Parse a .fc file: YAML `cell:` document with embedded logic.
+///
+/// Real Fractal .fc files use the format:
+/// ```yaml
+/// cell:
+///   identity:
+///     name: "greet"
+///     version: "1.0.0"
+///     type: "Transformer"
+///   contract:
+///     input: "object"
+///     output: "object"
+///   logic:
+///     lang: "typescript"
+///     process: |
+///       return ...;
+///   lineage:
+///     source: "..."
+///     trigger: "..."
+///     justification: "..."
+///     parent_context_hash: "..."
+///   signature: "0x..."
+/// ```
 fn parse_fc_file(content: &str, path: &PathBuf) -> Result<FractalCell, miette::Report> {
-    let parts: Vec<&str> = content.splitn(3, "---").collect();
-    if parts.len() < 3 {
-        return Err(miette::miette!(
-            "Invalid .fc file {}: expected YAML frontmatter between --- markers",
-            path.display()
-        ));
-    }
-
-    let yaml_body = parts[1];
-    let logic = parts[2].trim().to_string();
-
-    // Parse YAML into serde_json::Value first, then convert to FractalCell
-    let yaml_value: serde_json::Value = serde_yaml::from_str(yaml_body)
+    let yaml_value: serde_json::Value = serde_yaml::from_str(content)
         .map_err(|e| miette::miette!("YAML parse error in {}: {}", path.display(), e))?;
 
-    let cell = parse_cell_from_yaml(&yaml_value, &logic)
+    let cell_node = yaml_value
+        .get("cell")
+        .ok_or_else(|| miette::miette!("Missing 'cell:' key in {}", path.display()))?;
+
+    let cell = parse_cell_from_yaml(cell_node)
         .map_err(|e| miette::miette!("Invalid cell in {}: {}", path.display(), e))?;
 
     Ok(cell)
 }
 
-fn parse_cell_from_yaml(yaml: &serde_json::Value, logic: &str) -> Result<FractalCell, String> {
-    let identity = yaml.get("identity").ok_or("missing identity")?;
-    let contract = yaml.get("contract").ok_or("missing contract")?;
-    let channels = yaml
+fn parse_cell_from_yaml(cell: &serde_json::Value) -> Result<FractalCell, String> {
+    let identity = cell.get("identity").ok_or("missing identity")?;
+    let contract = cell.get("contract").ok_or("missing contract")?;
+    let logic_node = cell.get("logic").ok_or("missing logic")?;
+
+    // Logic is embedded in logic.process as a YAML block scalar
+    let logic = logic_node
+        .get("process")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Channels may be defined inline (typed-channels style) or absent
+    let channels = cell
         .get("channels")
         .and_then(|c| c.as_array())
         .cloned()
@@ -484,11 +508,14 @@ fn parse_cell_from_yaml(yaml: &serde_json::Value, logic: &str) -> Result<Fractal
         })
         .collect();
 
+    // Identity uses "type" not "cellType" in the real format
+    let lineage_node = cell.get("lineage");
+
     Ok(FractalCell {
         identity: openshell_fractal::schema::CellIdentity {
             name: identity.get("name").and_then(|v| v.as_str()).unwrap_or("unnamed").into(),
             cell_type: identity
-                .get("cellType")
+                .get("type")
                 .and_then(|v| v.as_str())
                 .map(parse_cell_type)
                 .unwrap_or(openshell_fractal::schema::CellType::Transformer),
@@ -499,34 +526,30 @@ fn parse_cell_from_yaml(yaml: &serde_json::Value, logic: &str) -> Result<Fractal
             output: contract.get("output").cloned().unwrap_or(serde_json::json!({})),
         },
         channels,
-        logic: logic.to_string(),
+        logic,
         lineage: openshell_fractal::schema::CellLineage {
-            source: yaml
-                .get("lineage")
+            source: lineage_node
                 .and_then(|l| l.get("source"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .into(),
-            trigger: yaml
-                .get("lineage")
+            trigger: lineage_node
                 .and_then(|l| l.get("trigger"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("manual")
                 .into(),
-            justification: yaml
-                .get("lineage")
+            justification: lineage_node
                 .and_then(|l| l.get("justification"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .into(),
-            signature: yaml
-                .get("lineage")
-                .and_then(|l| l.get("signature"))
+            signature: lineage_node
+                .and_then(|l| l.get("parent_context_hash"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .into(),
         },
-        signature: yaml
+        signature: cell
             .get("signature")
             .and_then(|v| v.as_str())
             .map(String::from),
