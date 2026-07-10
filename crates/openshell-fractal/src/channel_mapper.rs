@@ -253,18 +253,78 @@ fn map_llm_channel(channel: &TypedChannelConfig, kind: &str) -> MappingResult {
     })
 }
 
+/// GitHub operation → (HTTP method, path template). Mirrors the TypeScript
+/// bridge's GITHUB_OP_MAP. Paths use /** as the repo placeholder.
+const GITHUB_OP_MAP: &[(&str, &str, &str)] = &[
+    ("createPR", "POST", "/repos/**/pulls"),
+    ("mergePR", "PUT", "/repos/**/pulls/*/merge"),
+    ("listPRs", "GET", "/repos/**/pulls"),
+    ("getPR", "GET", "/repos/**/pulls/*"),
+    ("createIssue", "POST", "/repos/**/issues"),
+    ("listIssues", "GET", "/repos/**/issues"),
+    ("getIssue", "GET", "/repos/**/issues/*"),
+    ("commentOnIssue", "POST", "/repos/**/issues/*/comments"),
+    ("closeIssue", "PATCH", "/repos/**/issues/*"),
+    ("listRepos", "GET", "/user/repos"),
+    ("getRepo", "GET", "/repos/**"),
+    ("createRelease", "POST", "/repos/**/releases"),
+];
+
 fn map_github_channel(channel: &TypedChannelConfig) -> MappingResult {
-    let host = "api.github.com".to_string();
-    let rules = vec![L7Rule {
-        allow: Some(openshell_policy::L7Allow {
-            method: None, // All methods allowed to api.github.com — scope via Fractal
-            path: Some("/**".into()),
-        }),
-        deny: None,
-    }];
+    let allowed_repos = str_arr(&channel.scope, "allowedRepos");
+    let allowed_operations = str_arr(&channel.scope, "allowedOperations");
+    let mut anomalies: Vec<String> = Vec::new();
+    let mut rules: Vec<L7Rule> = Vec::new();
+    let mut unmapped: Vec<&str> = Vec::new();
+
+    for op in &allowed_operations {
+        let entry = GITHUB_OP_MAP.iter().find(|(k, _, _)| *k == op.as_str());
+        match entry {
+            Some(&(_, method, path)) => {
+                if !allowed_repos.is_empty() {
+                    // One rule per (operation, repo). Substitute /** with the
+                    // repo, preserving the operation suffix.
+                    for repo in &allowed_repos {
+                        let substituted = path.replace("/**", &format!("/{}", repo));
+                        rules.push(L7Rule {
+                            allow: Some(openshell_policy::L7Allow {
+                                method: Some(method.into()),
+                                path: Some(substituted),
+                            }),
+                            deny: None,
+                        });
+                    }
+                } else {
+                    rules.push(L7Rule {
+                        allow: Some(openshell_policy::L7Allow {
+                            method: Some(method.into()),
+                            path: Some(path.into()),
+                        }),
+                        deny: None,
+                    });
+                }
+            }
+            None => unmapped.push(op.as_str()),
+        }
+    }
+
+    if !unmapped.is_empty() {
+        anomalies.push(format!(
+            "github channel \"{}\": operations {:?} have no L7 method/path mapping; emitted rules cover only the mapped subset.",
+            channel.name, unmapped
+        ));
+    }
+
+    if rules.is_empty() {
+        return MappingResult::Skipped(SkippedChannel {
+            channel_name: channel.name.clone(),
+            kind: "github".into(),
+            reason: "no allowedOperations mapped to GitHub API endpoints".into(),
+        });
+    }
 
     let endpoint = NetworkEndpoint {
-        host,
+        host: "api.github.com".into(),
         port: Some(443),
         protocol: Some("rest".into()),
         tls: Some("terminate".into()),
@@ -293,7 +353,7 @@ fn map_github_channel(channel: &TypedChannelConfig) -> MappingResult {
         channel_name: channel.name.clone(),
         filesystem: None,
         network_policies,
-        anomalies: Vec::new(),
+        anomalies,
     })
 }
 
